@@ -44,7 +44,27 @@ jobs:
         with:
           workspaces: kon-app
 
+      # DNG ingestion (and the native-vs-Python oracle test) shells out to PKON's Python reader.
+      - name: Install Python (for PKON DNG ingestion)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install numpy==2.4.4 tifffile==2026.10.15 imagecodecs==2026.10.10
+
+      # Real DNG corpus (50 files, ~1.1 GB, raw.pixls.us). Pinned by sha256 in tests/fixtures/dng-corpus.tsv.
+      - name: Cache DNG corpus
+        uses: actions/cache@v4
+        with:
+          path: dng-corpus
+          key: dng-corpus-${{ hashFiles('kon-app/tests/fixtures/dng-corpus.tsv') }}
+      - name: Fetch DNG corpus
+        working-directory: .
+        run: python kon-app/tools/fetch_dng_corpus.py dng-corpus
+
       - run: cargo fmt --check
       - run: cargo check --all-targets
       # Includes the cross-platform determinism test: ELLIE output must be byte-identical to the pinned Windows build.
       - run: cargo test
+        env:
+          KON_TEST_FIXTURES: ${{ github.workspace }}/kon-app/tests/fixtures/small
+          KON_TEST_DNG_DIR: ${{ github.workspace }}/dng-corpus
