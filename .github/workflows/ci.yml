@@ -8,7 +8,14 @@ on:
 
 jobs:
   check:
-    runs-on: windows-latest
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false # a failure on one OS must not hide results from the others
+      matrix:
+        # macos-13 = Intel x86_64, macos-latest = Apple Silicon arm64, ubuntu = x86_64 Linux.
+        # (Linux arm64 and Windows arm64 runners are not included yet.)
+        os: [windows-latest, ubuntu-latest, macos-13, macos-latest]
     defaults:
       run:
         working-directory: kon-app
@@ -30,6 +37,12 @@ jobs:
         with:
           components: rustfmt
 
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: kon-app
+
       - run: cargo fmt --check
-      - run: cargo check
+      - run: cargo check --all-targets
+      # Includes the cross-platform determinism test: ELLIE output must be byte-identical to the pinned Windows build.
       - run: cargo test

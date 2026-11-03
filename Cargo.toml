@@ -7,3 +7,5 @@ description = "KON: unified desktop application integrating independent compress
 [dependencies]
 # PKON is the first engine. Its Cargo package is still named `nanoscope`; alias it locally as `pkon`.
 pkon = { package = "nanoscope", path = "../pkon" }
+# Per-user config/data/cache locations (XDG on Linux, Known Folders on Windows, ~/Library on macOS).
+directories = "5"

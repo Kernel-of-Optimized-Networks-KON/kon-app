@@ -1,60 +1,50 @@
-//! Minimal integration proof: KON calls PKON's real ULISA/container APIs (no GUI yet).
-use pkon::canon::{Canonical, Layout, Spec};
-use pkon::lisa::{ImageMetadata, SampleLayout};
-use pkon::pkon::Decoded;
-use pkon::ulisa::{self, Engine, Source};
+//! Temporary headless front end over the same `JobRunner` the GUI will use: `kon-app <dest-dir> <png>...`
+use kon_app::{
+    engine::Pkon,
+    job::{Event, Job, JobRunner},
+};
+use std::{path::PathBuf, sync::Arc};
 
 fn main() {
-    // Small synthetic monochrome RAW frame, encoded with LISA through the ULISA router.
-    let (w, h) = (24usize, 16usize);
-    let samples: Vec<u16> = (0..w * h)
-        .map(|i| ((i * 7 + (i / w) * 13) % 4096) as u16)
-        .collect();
-    let meta = ImageMetadata::without_cfa(w, h, SampleLayout::Monochrome);
-    let src = Source::Raw {
-        samples: &samples,
-        width: w,
-        height: h,
-        bit_depth: 12,
-        metadata: meta,
+    let mut args = std::env::args_os().skip(1);
+    let Some(dest) = args.next().map(PathBuf::from) else {
+        eprintln!("usage: kon-app <dest-dir> <image.png>...");
+        std::process::exit(2);
     };
-    let file = ulisa::encode(Engine::Lisa, &src).expect("PKON encode failed");
-    assert_eq!(ulisa::engine_of(&file).unwrap(), Engine::Lisa);
-    match ulisa::decode(&file).expect("PKON decode failed") {
-        (Engine::Lisa, Decoded::Raw(r)) => {
-            assert_eq!(r.samples, samples, "RAW round trip not lossless");
-            println!(
-                "RAW/LISA: {} samples -> {} bytes -> lossless OK",
-                samples.len(),
-                file.len()
-            );
-        }
-        _ => panic!("unexpected engine or payload"),
+    let runner = JobRunner::spawn(Arc::new(Pkon));
+    let mut pending = 0;
+    for (i, input) in args.enumerate() {
+        runner.submit(Job {
+            id: i as u64,
+            input: input.into(),
+            dest_dir: dest.clone(),
+        });
+        pending += 1;
     }
-
-    // Standard RGB image, encoded with ELLIE.
-    let (w, h) = (16u32, 12u32);
-    let data = (0..w * h * 3).map(|i| (i * 3 % 251) as u8).collect();
-    let img = Canonical::new(
-        Spec {
-            width: w,
-            height: h,
-            layout: Layout::Rgb,
-            bit_depth: 8,
-        },
-        data,
-    )
-    .unwrap();
-    let file = ulisa::encode(Engine::Ellie, &Source::Standard(&img)).expect("PKON encode failed");
-    match ulisa::decode(&file).expect("PKON decode failed") {
-        (Engine::Ellie, Decoded::Standard(c)) => {
-            assert_eq!(c.data, img.data, "ELLIE round trip not lossless");
-            println!(
-                "RGB/ELLIE: {} bytes -> {} bytes -> lossless OK",
-                img.data.len(),
-                file.len()
-            );
+    let mut failed = false;
+    while pending > 0 {
+        match runner.events.recv().expect("worker died") {
+            Event::Done {
+                output,
+                in_bytes,
+                out_bytes,
+                ..
+            } => {
+                pending -= 1;
+                println!(
+                    "OK  {} ({in_bytes} -> {out_bytes} bytes, verified lossless)",
+                    output.display()
+                );
+            }
+            Event::Failed { id, error } => {
+                pending -= 1;
+                failed = true;
+                eprintln!("FAIL job {id}: {error}");
+            }
+            Event::Cancelled { .. } => pending -= 1,
+            Event::Started { .. } | Event::Stage { .. } => {}
         }
-        _ => panic!("unexpected engine or payload"),
     }
+    runner.shutdown();
+    std::process::exit(failed as i32);
 }
