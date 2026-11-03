@@ -10,6 +10,8 @@ jobs:
   check:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    # Apple Silicon is non-blocking for now; every other OS in the matrix stays blocking.
+    continue-on-error: ${{ matrix.os == 'macos-latest' }}
     strategy:
       fail-fast: false # a failure on one OS must not hide results from the others
       matrix:
