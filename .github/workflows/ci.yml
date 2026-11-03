@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: kon-app
+    steps:
+      - name: Checkout kon-app
+        uses: actions/checkout@v4
+        with:
+          path: kon-app
+
+      # kon-app depends on PKON via `path = "../pkon"`, so PKON must be a sibling directory.
+      - name: Checkout PKON
+        uses: actions/checkout@v4
+        with:
+          repository: Kernel-of-Optimized-Networks-KON/pkon
+          path: pkon
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - run: cargo fmt --check
+      - run: cargo check
+      - run: cargo test
