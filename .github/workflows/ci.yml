@@ -13,9 +13,9 @@ jobs:
     strategy:
       fail-fast: false # a failure on one OS must not hide results from the others
       matrix:
-        # macos-13 = Intel x86_64, macos-latest = Apple Silicon arm64, ubuntu = x86_64 Linux.
+        # macos-26-intel = Intel x86_64, macos-latest = Apple Silicon arm64, ubuntu = x86_64 Linux.
         # (Linux arm64 and Windows arm64 runners are not included yet.)
-        os: [windows-latest, ubuntu-latest, macos-13, macos-latest]
+        os: [windows-latest, ubuntu-latest, macos-26-intel, macos-latest]
     defaults:
       run:
         working-directory: kon-app
