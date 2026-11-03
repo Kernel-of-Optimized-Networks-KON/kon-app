@@ -1,0 +1,9 @@
+[package]
+name = "kon-app"
+version = "0.1.0"
+edition = "2021"
+description = "KON: unified desktop application integrating independent compression engines"
+
+[dependencies]
+# PKON is the first engine. Its Cargo package is still named `nanoscope`; alias it locally as `pkon`.
+pkon = { package = "nanoscope", path = "../pkon" }
