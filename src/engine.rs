@@ -39,3 +39,37 @@ impl Engine for Pkon {
         }
     }
 }
+
+/// What PKON can tell us about an input without writing anything. Reflects only what the loader actually
+/// reads: pixel geometry, the embedded ICC profile (present or not), and loader notes about representation changes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImageInfo {
+    pub width: u32,
+    pub height: u32,
+    pub bit_depth: u8,
+    pub layout: String,
+    pub has_icc: bool,
+    pub icc_bytes: usize,
+    pub notes: Vec<String>,
+}
+
+impl Pkon {
+    /// Whether the PKON adapter can currently take this file (standard PNG only; RAW/DNG is not wired).
+    pub fn accepts(path: &Path) -> bool {
+        path.extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("png"))
+    }
+
+    pub fn inspect(path: &Path) -> Result<ImageInfo, String> {
+        let img = pkon::canon::Canonical::load(path)?;
+        Ok(ImageInfo {
+            width: img.spec.width,
+            height: img.spec.height,
+            bit_depth: img.spec.bit_depth,
+            layout: img.spec.layout.name().to_string(),
+            has_icc: img.icc.is_some(),
+            icc_bytes: img.icc.as_ref().map_or(0, |v| v.len()),
+            notes: img.notes.clone(),
+        })
+    }
+}

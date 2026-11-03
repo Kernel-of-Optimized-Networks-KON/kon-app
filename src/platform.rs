@@ -47,11 +47,19 @@ pub fn unique_output_path(dir: &Path, input: &Path, ext: &str) -> PathBuf {
 /// Write via a temp file in the destination directory, then rename into place, so a crash or cancel never leaves a
 /// truncated output. Refuses to replace an existing file.
 pub fn write_new_file(dest: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    write_file(dest, bytes, false)
+}
+
+/// Same atomic write; with `overwrite` an existing file is replaced. Callers pass `true` only after explicit user approval.
+pub fn write_file(dest: &Path, bytes: &[u8], overwrite: bool) -> std::io::Result<()> {
     let dir = dest
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
-    let tmp = dir.join(format!(".kon-{}.tmp", std::process::id()));
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    // Unique per write: compression and export may write into the same folder concurrently.
+    let tmp = dir.join(format!(".kon-{}-{seq}.tmp", std::process::id()));
     let result = (|| {
         let mut f = std::fs::OpenOptions::new()
             .write(true)
@@ -60,7 +68,7 @@ pub fn write_new_file(dest: &Path, bytes: &[u8]) -> std::io::Result<()> {
         f.write_all(bytes)?;
         f.sync_all()?;
         // rename() replaces silently on Unix but errors on Windows; this check makes behavior uniform.
-        if dest.exists() {
+        if !overwrite && dest.exists() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::AlreadyExists,
                 "destination exists",

@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>KON</title>
+    <link rel="icon" type="image/svg+xml" href="/kon-emblem.svg" />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <div class="brand"><img class="logo" src="/kon-emblem.svg" alt="" width="28" height="28" /><span>KON</span></div>
+        <nav class="tabs" role="tablist">
+          <button id="tab-compress" class="tab active" role="tab">Compress</button>
+          <button id="tab-viewer" class="tab" role="tab">PKON Viewer</button>
+        </nav>
+        <div class="top-actions">
+          <div id="actions-compress" class="top-actions">
+            <button id="add-files" class="btn">Add Files</button>
+            <button id="add-folder" class="btn">Add Folder</button>
+            <button id="clear" class="btn ghost">Clear</button>
+          </div>
+          <div id="actions-viewer" class="top-actions" hidden>
+            <button id="v-open-files" class="btn">Open Files</button>
+            <button id="v-open-folder" class="btn">Open Folder</button>
+            <button id="v-clear" class="btn ghost">Clear</button>
+          </div>
+        </div>
+      </header>
+
+      <!-- ============ Compress workspace ============ -->
+      <div id="view-compress" class="view compress-view">
+        <main class="workspace">
+          <section class="queue-pane">
+            <div id="dropzone" class="dropzone">
+              <div class="drop-title">Drop files or folders here</div>
+              <div class="drop-sub">PNG (8/16-bit) is supported by the PKON engine today. Other formats can be queued but are skipped.</div>
+            </div>
+            <div class="table-wrap">
+              <table class="queue">
+                <thead>
+                  <tr><th>File</th><th>Format</th><th>Size</th><th>Engine</th><th class="col-status">Status</th><th class="num">Result</th></tr>
+                </thead>
+                <tbody id="rows"></tbody>
+              </table>
+              <div id="empty" class="empty">No files yet.</div>
+            </div>
+          </section>
+
+          <aside class="inspector" id="inspector">
+            <h2>Inspector</h2>
+            <div id="inspector-body" class="muted">Select a file to see its details.</div>
+          </aside>
+        </main>
+
+        <footer class="bottombar">
+          <div class="dest">
+            <div class="label">Output folder</div>
+            <div class="dest-row">
+              <button id="pick-dest" class="btn">Choose…</button>
+              <span id="dest-path" class="path muted">Not selected — choose where compressed files will be saved</span>
+            </div>
+            <div class="hint">Originals are never modified. Outputs get a new <code>.pkon</code> extension and never overwrite existing files.</div>
+          </div>
+          <div class="run">
+            <div class="progress-block">
+              <div class="progress-head"><span id="overall-label">Idle</span><span id="overall-stats" class="muted"></span></div>
+              <div class="bar"><div id="overall-bar" class="fill"></div></div>
+              <div id="summary" class="summary"></div>
+            </div>
+            <button id="start" class="btn primary" disabled>Start compression</button>
+            <button id="cancel" class="btn danger" hidden>Cancel remaining</button>
+          </div>
+        </footer>
+      </div>
+
+      <!-- ============ PKON Viewer workspace ============ -->
+      <div id="view-viewer" class="view viewer-view" hidden>
+        <aside class="v-browser">
+          <div id="viewer-drop" class="dropzone compact">
+            <div class="drop-title">Drop .pkon files or folders</div>
+          </div>
+          <div id="v-count" class="v-count muted"></div>
+          <div id="v-list" class="v-list"></div>
+          <div id="v-empty" class="empty">Open a <code>.pkon</code> file or a folder that contains them.</div>
+        </aside>
+
+        <section class="v-stage">
+          <div class="v-toolbar">
+            <div class="seg" id="v-zoom">
+              <button data-zoom="fit" class="on">Fit</button>
+              <button data-zoom="1">100%</button>
+              <button data-zoom="2">200%</button>
+            </div>
+            <span id="v-dims" class="muted"></span>
+            <span class="spacer"></span>
+            <button id="v-export" class="btn primary" disabled>Export as PNG…</button>
+          </div>
+          <div id="v-canvas" class="v-canvas">
+            <div id="v-state" class="v-state muted">Select a file to preview it.</div>
+            <img id="v-img" alt="Decoded PKON preview" hidden />
+          </div>
+          <div id="v-status" class="v-status"></div>
+        </section>
+
+        <aside class="inspector v-inspector">
+          <h2>Container</h2>
+          <div id="v-info" class="muted">Select a file to inspect its container.</div>
+        </aside>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

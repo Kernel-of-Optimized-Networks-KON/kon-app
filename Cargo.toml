@@ -9,3 +9,5 @@ description = "KON: unified desktop application integrating independent compress
 pkon = { package = "nanoscope", path = "../pkon" }
 # Per-user config/data/cache locations (XDG on Linux, Known Folders on Windows, ~/Library on macOS).
 directories = "5"
+# PNG writer for viewer previews and exports (PKON has no PNG output API). Already in the tree via PKON's `image` dependency.
+png = "0.18"
