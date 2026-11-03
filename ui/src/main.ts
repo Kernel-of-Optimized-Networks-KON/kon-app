@@ -40,6 +40,8 @@ const STATUS_LABEL: Record<Status, string> = {
   complete: "Complete", failed: "Failed", cancelled: "Cancelled", skipped: "Unsupported",
 };
 
+let cancelling = false; // a cancel request was sent for the running batch
+
 async function addPaths(paths: string[]) {
   if (running || paths.length === 0) return;
   const entries = await invoke<FileEntry[]>("add_paths", { paths });
@@ -115,7 +117,11 @@ async function renderInspector() {
   if (it.status === "complete" && it.outBytes !== undefined) {
     const c = el("div", "callout");
     c.append(el("b", "", "✓ Verified lossless"),
-      el("div", "", `Decoded output matches the original pixel-for-pixel before it was written.`),
+      el("div", "", it.format === "JPEG"
+        ? "Decoded output matches the JPEG's decoded pixels exactly. The original JPEG file, EXIF and ICC cannot be recovered."
+        : it.format === "DNG"
+        ? "Decoded output matches the stored RAW sensor samples exactly. The output is a .pkon file, not a DNG."
+        : `Decoded output matches the original pixel-for-pixel before it was written.`),
       el("div", "", `${bytes(it.size)} → ${bytes(it.outBytes)} (${(it.size / it.outBytes).toFixed(2)}×, ${(100 - (100 * it.outBytes) / it.size).toFixed(1)}% smaller)`),
       el("div", "detail", it.output ?? ""));
     body.append(c);
@@ -167,6 +173,8 @@ function renderControls() {
   ($("start") as HTMLButtonElement).disabled = running || !dest || runnable.length === 0;
   $("start").hidden = running;
   $("cancel").hidden = !running;
+  ($("cancel") as HTMLButtonElement).disabled = cancelling;
+  $("cancel").textContent = cancelling ? "Cancelling…" : "Cancel remaining";
   for (const id of ["add-files", "add-folder", "clear", "pick-dest"]) ($(id) as HTMLButtonElement).disabled = running;
   renderOverall();
 }
@@ -183,7 +191,7 @@ function renderOverall() {
   }
   const finished = progress?.finished ?? 0;
   fill.style.width = `${(100 * finished) / batchTotal}%`;
-  label.textContent = running ? `Processing ${finished} / ${batchTotal}` : `Finished ${finished} / ${batchTotal}`;
+  label.textContent = running ? (cancelling ? `Cancelling · finishing the current file (${finished} / ${batchTotal})` : `Processing ${finished} / ${batchTotal}`) : `Finished ${finished} / ${batchTotal}`;
   const parts: string[] = [];
   if (running && progress?.bytesPerSec) parts.push(`${bytes(progress.bytesPerSec)}/s`);
   if (running && progress?.etaSecs != null) parts.push(`ETA ${duration(progress.etaSecs)}`);
@@ -230,7 +238,7 @@ void listen<JobEvent>("job-event", ({ payload: ev }) => {
   if (selected === ev.id && (ev.kind === "done" || ev.kind === "failed")) void renderInspector();
 });
 void listen<Progress>("batch-progress", ({ payload }) => { progress = payload; renderOverall(); });
-void listen("batch-finished", () => { running = false; renderControls(); });
+void listen("batch-finished", () => { running = false; cancelling = false; renderAll(); });
 
 // ---------- actions ----------
 async function pick(directory: boolean) {
@@ -253,17 +261,24 @@ $("start").addEventListener("click", async () => {
   const todo = [...items.values()].filter((i) => i.engine && (i.status === "queued" || i.status === "failed" || i.status === "cancelled"));
   for (const i of todo) { i.status = "queued"; i.error = undefined; }
   batchTotal = todo.length; progress = { finished: 0, total: todo.length, bytesPerSec: null, etaSecs: null };
-  running = true;
+  running = true; cancelling = false;
   renderAll();
   try {
     await invoke("start_batch", { items: todo.map((i) => ({ id: i.id, path: i.path })), dest });
+    // A Cancel click that arrived before the backend registered the batch would have been a no-op; repeat it now.
+    if (cancelling) void invoke("cancel_batch");
   } catch (e) {
-    running = false; batchTotal = 0;
+    running = false; cancelling = false; batchTotal = 0;
     renderAll();
     $("summary").textContent = String(e);
   }
 });
-$("cancel").addEventListener("click", () => void invoke("cancel_batch"));
+$("cancel").addEventListener("click", () => {
+  if (!running || cancelling) return;
+  cancelling = true;
+  renderControls();
+  void invoke("cancel_batch");
+});
 
 // Drag & drop: Tauri delivers real filesystem paths (folders included) rather than browser File objects.
 const zone = $("dropzone");

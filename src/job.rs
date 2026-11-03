@@ -3,9 +3,9 @@
 //! Progress is per-file/per-stage because PKON's API is one-shot (no intra-file progress callback).
 use crate::{engine::Engine, platform};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::VecDeque;
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 
 pub struct Job {
@@ -45,57 +45,96 @@ pub enum Event {
     },
 }
 
+/// Queue shared by the caller and the worker. The worker takes a job (= decides to start it) and `cancel_pending`
+/// drains the queue under the same lock, so a job is either already running or reported `Cancelled` — never both,
+/// and nothing can start after a cancel has been accepted.
+#[derive(Default)]
+struct Queue {
+    jobs: VecDeque<Job>,
+    cancelled: bool,
+    closed: bool,
+}
+
+struct Shared {
+    q: Mutex<Queue>,
+    cv: Condvar,
+}
+
 pub struct JobRunner {
-    tx: Option<Sender<Job>>,
+    shared: Arc<Shared>,
+    etx: Sender<Event>,
     pub events: Receiver<Event>,
-    cancel: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
 }
 
 impl JobRunner {
     pub fn spawn(engine: Arc<dyn Engine>) -> Self {
-        let (tx, rx) = channel::<Job>();
         let (etx, events) = channel();
-        let cancel = Arc::new(AtomicBool::new(false));
-        let c = cancel.clone();
-        let worker = std::thread::spawn(move || {
-            for job in rx {
-                let id = job.id;
-                let ev = if c.load(Ordering::Relaxed) {
-                    Event::Cancelled { id }
-                } else {
-                    run(&*engine, job, &etx)
-                };
-                if etx.send(ev).is_err() {
-                    break; // receiver side gone
+        let shared = Arc::new(Shared { q: Mutex::new(Queue::default()), cv: Condvar::new() });
+        let (sh, tx) = (shared.clone(), etx.clone());
+        let worker = std::thread::spawn(move || loop {
+            let job = {
+                let mut q = sh.q.lock().unwrap();
+                loop {
+                    if let Some(j) = q.jobs.pop_front() {
+                        break j;
+                    }
+                    if q.closed {
+                        return;
+                    }
+                    q = sh.cv.wait(q).unwrap();
                 }
+            };
+            let ev = run(&*engine, job, &tx);
+            if tx.send(ev).is_err() {
+                break; // receiver side gone
             }
         });
-        Self {
-            tx: Some(tx),
-            events,
-            cancel,
-            worker: Some(worker),
-        }
+        Self { shared, etx, events, worker: Some(worker) }
     }
 
+    /// After `cancel_pending`, newly submitted jobs are reported `Cancelled` straight away.
     pub fn submit(&self, job: Job) {
-        if let Some(tx) = &self.tx {
-            let _ = tx.send(job);
+        let mut q = self.shared.q.lock().unwrap();
+        if q.cancelled {
+            drop(q);
+            let _ = self.etx.send(Event::Cancelled { id: job.id });
+        } else {
+            q.jobs.push_back(job);
+            self.shared.cv.notify_one();
         }
     }
 
-    /// Queued jobs report `Cancelled`; the job already running finishes (the engine API cannot be interrupted).
+    /// Every job that has not started is reported `Cancelled` immediately; the job already running finishes (the
+    /// engine API cannot be interrupted) and reports its own result. Idempotent: repeat calls change nothing.
     pub fn cancel_pending(&self) {
-        self.cancel.store(true, Ordering::Relaxed);
+        let drained: Vec<Job> = {
+            let mut q = self.shared.q.lock().unwrap();
+            q.cancelled = true;
+            q.jobs.drain(..).collect()
+        };
+        for j in drained {
+            let _ = self.etx.send(Event::Cancelled { id: j.id });
+        }
     }
 
     /// Finish queued work and stop the worker.
     pub fn shutdown(mut self) {
-        self.tx.take();
+        self.close();
         if let Some(w) = self.worker.take() {
             let _ = w.join();
         }
+    }
+
+    fn close(&self) {
+        self.shared.q.lock().unwrap().closed = true;
+        self.shared.cv.notify_all();
+    }
+}
+
+impl Drop for JobRunner {
+    fn drop(&mut self) {
+        self.close();
     }
 }
 

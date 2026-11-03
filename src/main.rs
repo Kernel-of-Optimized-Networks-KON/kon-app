@@ -8,7 +8,7 @@ use std::{path::PathBuf, sync::Arc};
 fn main() {
     let mut args = std::env::args_os().skip(1);
     let Some(dest) = args.next().map(PathBuf::from) else {
-        eprintln!("usage: kon-app <dest-dir> <image.png>...");
+        eprintln!("usage: kon-app <dest-dir> <image.png|jpg|dng>...");
         std::process::exit(2);
     };
     let runner = JobRunner::spawn(Arc::new(Pkon));

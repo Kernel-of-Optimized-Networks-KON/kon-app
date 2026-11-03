@@ -1,7 +1,7 @@
 //! Tauri shell. Owns no compression logic: it translates between the webview and kon-app's `JobRunner`.
 //! Commands are `async` so Tauri runs them off the UI thread; each batch runs on its own thread.
 use kon_app::{
-    engine::{Engine, Pkon},
+    engine::{detect, Pkon},
     ingest,
     job::{Event, Job, JobRunner, Stage},
     platform, viewer,
@@ -68,19 +68,25 @@ async fn add_paths(
     let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
     Ok(ingest::scan(&paths)
         .into_iter()
-        .map(|p| FileEntry {
-            id: state.next_id.fetch_add(1, Ordering::Relaxed),
-            name: p
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default(),
-            format: p
-                .extension()
-                .map(|e| e.to_string_lossy().to_uppercase())
-                .unwrap_or_else(|| "—".into()),
-            size: std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0),
-            engine: Pkon::accepts(&p).then(|| Pkon.name()),
-            path: p.to_string_lossy().into_owned(),
+        .map(|p| {
+            let detected = detect(&p);
+            FileEntry {
+                id: state.next_id.fetch_add(1, Ordering::Relaxed),
+                name: p
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                format: match &detected {
+                    Ok(f) => f.name().to_string(),
+                    Err(_) => p
+                        .extension()
+                        .map(|e| e.to_string_lossy().to_uppercase())
+                        .unwrap_or_else(|| "—".into()),
+                },
+                size: std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0),
+                engine: detected.as_ref().ok().map(|f| f.engine()),
+                path: p.to_string_lossy().into_owned(),
+            }
         })
         .collect())
 }
@@ -93,7 +99,7 @@ async fn inspect_file(path: String) -> Result<Inspection, String> {
         return Ok(Inspection {
             size,
             image: None,
-            error: Some("No engine can read this format yet.".into()),
+            error: Some(detect(&p).err().unwrap_or_else(|| "Unsupported format.".into())),
         });
     }
     Ok(match Pkon::inspect(&p) {
