@@ -2,8 +2,8 @@
 //! so it never blocks. Plain std threads + channels: no async runtime needed for file-at-a-time jobs.
 //! Progress is per-file/per-stage because PKON's API is one-shot (no intra-file progress callback).
 use crate::{engine::Engine, platform};
-use std::path::PathBuf;
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
@@ -70,7 +70,10 @@ pub struct JobRunner {
 impl JobRunner {
     pub fn spawn(engine: Arc<dyn Engine>) -> Self {
         let (etx, events) = channel();
-        let shared = Arc::new(Shared { q: Mutex::new(Queue::default()), cv: Condvar::new() });
+        let shared = Arc::new(Shared {
+            q: Mutex::new(Queue::default()),
+            cv: Condvar::new(),
+        });
         let (sh, tx) = (shared.clone(), etx.clone());
         let worker = std::thread::spawn(move || loop {
             let job = {
@@ -90,7 +93,12 @@ impl JobRunner {
                 break; // receiver side gone
             }
         });
-        Self { shared, etx, events, worker: Some(worker) }
+        Self {
+            shared,
+            etx,
+            events,
+            worker: Some(worker),
+        }
     }
 
     /// After `cancel_pending`, newly submitted jobs are reported `Cancelled` straight away.

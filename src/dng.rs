@@ -24,12 +24,30 @@ struct Tiff<'a> {
 
 impl Tiff<'_> {
     fn u16(&self, o: usize) -> R<u16> {
-        let b: [u8; 2] = self.d.get(o..o + 2).ok_or("truncated file")?.try_into().unwrap();
-        Ok(if self.le { u16::from_le_bytes(b) } else { u16::from_be_bytes(b) })
+        let b: [u8; 2] = self
+            .d
+            .get(o..o + 2)
+            .ok_or("truncated file")?
+            .try_into()
+            .unwrap();
+        Ok(if self.le {
+            u16::from_le_bytes(b)
+        } else {
+            u16::from_be_bytes(b)
+        })
     }
     fn u32(&self, o: usize) -> R<u32> {
-        let b: [u8; 4] = self.d.get(o..o + 4).ok_or("truncated file")?.try_into().unwrap();
-        Ok(if self.le { u32::from_le_bytes(b) } else { u32::from_be_bytes(b) })
+        let b: [u8; 4] = self
+            .d
+            .get(o..o + 4)
+            .ok_or("truncated file")?
+            .try_into()
+            .unwrap();
+        Ok(if self.le {
+            u32::from_le_bytes(b)
+        } else {
+            u32::from_be_bytes(b)
+        })
     }
 }
 
@@ -64,7 +82,11 @@ fn read_ifd(t: &Tiff, off: usize, depth: u8) -> R<(Ifd, usize)> {
         let (tag, typ, count) = (t.u16(e)?, t.u16(e + 2)?, t.u32(e + 4)? as usize);
         let Some(sz) = type_size(typ) else { continue };
         let total = sz.checked_mul(count).ok_or("bad tag size")?;
-        let at = if total <= 4 { e + 8 } else { t.u32(e + 8)? as usize };
+        let at = if total <= 4 {
+            e + 8
+        } else {
+            t.u32(e + 8)? as usize
+        };
         if at.checked_add(total).is_none_or(|end| end > t.d.len()) {
             return Err(format!("tag {tag} points outside the file"));
         }
@@ -106,7 +128,12 @@ impl Ifd {
     fn ascii(&self, t: &Tiff, tag: u16) -> Option<String> {
         let e = self.tags.get(&tag)?;
         let b = t.d.get(e.at..e.at + e.count)?;
-        Some(String::from_utf8_lossy(b).trim_end_matches('\0').trim().to_string())
+        Some(
+            String::from_utf8_lossy(b)
+                .trim_end_matches('\0')
+                .trim()
+                .to_string(),
+        )
     }
 }
 
@@ -136,7 +163,13 @@ fn compression_name(c: u64) -> String {
 // ---------------------------------------------------------------- public entry
 
 pub fn ingest_dng(bytes: &[u8]) -> R<DngInput> {
-    ingest(bytes).map_err(|e| if e.starts_with("unsupported DNG") { e } else { format!("cannot read DNG: {e}") })
+    ingest(bytes).map_err(|e| {
+        if e.starts_with("unsupported DNG") {
+            e
+        } else {
+            format!("cannot read DNG: {e}")
+        }
+    })
 }
 
 fn ingest(d: &[u8]) -> R<DngInput> {
@@ -155,14 +188,27 @@ fn ingest(d: &[u8]) -> R<DngInput> {
     }
     let pages = all_pages(&ifds);
     let area = |p: &Ifd| p.uint(&t, 256).unwrap_or(0) * p.uint(&t, 257).unwrap_or(0);
-    let raw: Vec<&Ifd> = pages.iter().copied().filter(|p| matches!(p.uint(&t, 262), Some(32803 | 34892))).collect();
+    let raw: Vec<&Ifd> = pages
+        .iter()
+        .copied()
+        .filter(|p| matches!(p.uint(&t, 262), Some(32803 | 34892)))
+        .collect();
     let cand = if raw.is_empty() { &pages } else { &raw };
     // First maximum, like Python's max().
-    let p = cand.iter().copied().fold(None::<&Ifd>, |b, p| if b.is_none_or(|b| area(p) > area(b)) { Some(p) } else { b });
+    let p = cand.iter().copied().fold(None::<&Ifd>, |b, p| {
+        if b.is_none_or(|b| area(p) > area(b)) {
+            Some(p)
+        } else {
+            b
+        }
+    });
     let p = p.ok_or("no image directory found")?;
     let root = pages.first().ok_or("no image directory found")?;
 
-    let (w, h) = (p.uint(&t, 256).ok_or("missing ImageWidth")? as usize, p.uint(&t, 257).ok_or("missing ImageLength")? as usize);
+    let (w, h) = (
+        p.uint(&t, 256).ok_or("missing ImageWidth")? as usize,
+        p.uint(&t, 257).ok_or("missing ImageLength")? as usize,
+    );
     let spp = p.uint(&t, 277).unwrap_or(1) as usize;
     let bps_all = p.uints(&t, 258).unwrap_or_else(|| vec![1]);
     let comp = p.uint(&t, 259).unwrap_or(1);
@@ -219,14 +265,19 @@ fn ingest(d: &[u8]) -> R<DngInput> {
     if offs.len() < across * down {
         return Err("fewer strips/tiles than the image needs".into());
     }
-    let n = w.checked_mul(h).filter(|&n| n > 0 && n <= 1 << 28).ok_or("image dimensions are zero or exceed KON's 2^28-sample limit")?;
+    let n = w
+        .checked_mul(h)
+        .filter(|&n| n > 0 && n <= 1 << 28)
+        .ok_or("image dimensions are zero or exceed KON's 2^28-sample limit")?;
     let mut samples = vec![0u16; n];
     let mut tables = HashMap::new();
     for ty in 0..down {
         for tx in 0..across {
             let i = ty * across + tx;
             let (o, c) = (offs[i] as usize, cnts[i] as usize);
-            let data = d.get(o..o.checked_add(c).ok_or("bad offset")?).ok_or("strip/tile data outside the file")?;
+            let data = d
+                .get(o..o.checked_add(c).ok_or("bad offset")?)
+                .ok_or("strip/tile data outside the file")?;
             // Strips are as tall as the rows they hold; tiles are always full size.
             let rows_here = if tiled { uh } else { uh.min(h - ty * uh) };
             let unit = if comp == 1 {
@@ -250,10 +301,15 @@ fn ingest(d: &[u8]) -> R<DngInput> {
 
     // Bit depth, exactly as lisa_dng_extract.py.
     let mx = samples.iter().copied().max().unwrap_or(0) as u32;
-    let wl = p.uints(&t, 50717).and_then(|v| v.into_iter().max()).unwrap_or(0) as u32;
+    let wl = p
+        .uints(&t, 50717)
+        .and_then(|v| v.into_iter().max())
+        .unwrap_or(0) as u32;
     let bit_depth = (bps as u32).min((32 - mx.max(wl).leading_zeros()).max(1));
     if bit_depth < 16 && mx >= (1u32 << bit_depth) {
-        return Err(format!("unsupported DNG: sample value {mx} does not fit {bit_depth} bits"));
+        return Err(format!(
+            "unsupported DNG: sample value {mx} does not fit {bit_depth} bits"
+        ));
     }
     let bit_depth = bit_depth as u8;
 
@@ -262,17 +318,36 @@ fn ingest(d: &[u8]) -> R<DngInput> {
     let metadata = match cfa {
         None => ImageMetadata::without_cfa(w, h, SampleLayout::Monochrome),
         Some(cfa) => {
-            let dim = p.uints(&t, 33421).ok_or("DNG has CFAPattern without CFARepeatPatternDim")?;
+            let dim = p
+                .uints(&t, 33421)
+                .ok_or("DNG has CFAPattern without CFARepeatPatternDim")?;
             if dim.len() != 2 {
                 return Err("malformed CFA dimensions".into());
             }
-            let aa = p.uints(&t, 50829).filter(|a| a.len() == 4).unwrap_or_else(|| vec![0, 0, h as u64, w as u64]);
-            let org = [(aa[1] as i64).wrapping_neg().rem_euclid(dim[1] as i64) as usize, (aa[0] as i64).wrapping_neg().rem_euclid(dim[0] as i64) as usize];
+            let aa = p
+                .uints(&t, 50829)
+                .filter(|a| a.len() == 4)
+                .unwrap_or_else(|| vec![0, 0, h as u64, w as u64]);
+            let org = [
+                (aa[1] as i64).wrapping_neg().rem_euclid(dim[1] as i64) as usize,
+                (aa[0] as i64).wrapping_neg().rem_euclid(dim[0] as i64) as usize,
+            ];
             let entries = cfa
                 .iter()
-                .map(|&v| u8::try_from(v).ok().and_then(|v| ColorFilter::try_from(v).ok()).ok_or(format!("unsupported CFA color code {v}")))
+                .map(|&v| {
+                    u8::try_from(v)
+                        .ok()
+                        .and_then(|v| ColorFilter::try_from(v).ok())
+                        .ok_or(format!("unsupported CFA color code {v}"))
+                })
                 .collect::<Result<Vec<_>, _>>()?;
-            let pat = CfaPattern { width: dim[1] as usize, height: dim[0] as usize, entries, origin_x: org[0], origin_y: org[1] };
+            let pat = CfaPattern {
+                width: dim[1] as usize,
+                height: dim[0] as usize,
+                entries,
+                origin_x: org[0],
+                origin_y: org[1],
+            };
             let bayer = ImageMetadata::with_cfa(w, h, SampleLayout::BayerCfa, pat.clone());
             if dim == [2, 2] && bayer.validate().is_ok() {
                 bayer
@@ -297,14 +372,24 @@ fn ingest(d: &[u8]) -> R<DngInput> {
 fn unpack_plain(data: &[u8], w: usize, rows: usize, bps: usize, le: bool) -> R<Vec<u16>> {
     let stride = (w * bps).div_ceil(8);
     if data.len() < stride * rows {
-        return Err(format!("uncompressed strip/tile has {} bytes, needs {}", data.len(), stride * rows));
+        return Err(format!(
+            "uncompressed strip/tile has {} bytes, needs {}",
+            data.len(),
+            stride * rows
+        ));
     }
     let mut out = Vec::with_capacity(w * rows);
     for r in 0..rows {
         let row = &data[r * stride..][..stride];
         match bps {
             8 => out.extend(row[..w].iter().map(|&b| b as u16)),
-            16 => out.extend(row.chunks_exact(2).take(w).map(|c| if le { u16::from_le_bytes([c[0], c[1]]) } else { u16::from_be_bytes([c[0], c[1]]) })),
+            16 => out.extend(row.chunks_exact(2).take(w).map(|c| {
+                if le {
+                    u16::from_le_bytes([c[0], c[1]])
+                } else {
+                    u16::from_be_bytes([c[0], c[1]])
+                }
+            })),
             _ => {
                 let (mut acc, mut nbits, mut it) = (0u32, 0usize, row.iter());
                 for _ in 0..w {
@@ -405,7 +490,8 @@ mod ljpeg {
                 p += 1;
             }
             let m = *d.get(p + 1).ok_or("truncated JPEG")?;
-            let len = ((*d.get(p + 2).ok_or("truncated JPEG")? as usize) << 8) | *d.get(p + 3).ok_or("truncated JPEG")? as usize;
+            let len = ((*d.get(p + 2).ok_or("truncated JPEG")? as usize) << 8)
+                | *d.get(p + 3).ok_or("truncated JPEG")? as usize;
             let seg = d.get(p + 4..p + 2 + len).ok_or("truncated JPEG segment")?;
             p += 2 + len;
             match m {
@@ -444,12 +530,17 @@ mod ljpeg {
                     }
                 }
                 0xC0..=0xCF if m != 0xC8 && m != 0xCC => {
-                    return Err(format!("JPEG process SOF{} is not lossless JPEG (unsupported)", m - 0xC0));
+                    return Err(format!(
+                        "JPEG process SOF{} is not lossless JPEG (unsupported)",
+                        m - 0xC0
+                    ));
                 }
                 0xDD if seg.len() >= 2 => ri = ((seg[0] as usize) << 8) | seg[1] as usize,
                 0xDA => {
                     if nc == 0 || seg.len() < 4 + 2 * nc || seg[0] as usize != nc {
-                        return Err("only single-scan interleaved lossless JPEG is supported".into());
+                        return Err(
+                            "only single-scan interleaved lossless JPEG is supported".into()
+                        );
                     }
                     let sel: Vec<usize> = (0..nc).map(|i| (seg[2 + 2 * i] >> 4) as usize).collect();
                     let (pred, pt) = (seg[1 + 2 * nc] as u32, (seg[3 + 2 * nc] & 15) as u32);
@@ -458,7 +549,11 @@ mod ljpeg {
                     }
                     let huff: Vec<Rc<Huff>> = sel
                         .iter()
-                        .map(|&s| tabs.get(s).and_then(|t| t.clone()).ok_or("missing Huffman table"))
+                        .map(|&s| {
+                            tabs.get(s)
+                                .and_then(|t| t.clone())
+                                .ok_or("missing Huffman table")
+                        })
                         .collect::<Result<_, _>>()?;
                     return scan(&d[p..], &huff, nc, fw, fh, prec, pred, pt, ri);
                 }
@@ -494,20 +589,43 @@ mod ljpeg {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn scan(d: &[u8], huff: &[Rc<Huff>], nc: usize, w: usize, h: usize, prec: u32, pred: u32, pt: u32, ri: usize) -> R<(Vec<u16>, usize, usize)> {
+    fn scan(
+        d: &[u8],
+        huff: &[Rc<Huff>],
+        nc: usize,
+        w: usize,
+        h: usize,
+        prec: u32,
+        pred: u32,
+        pt: u32,
+        ri: usize,
+    ) -> R<(Vec<u16>, usize, usize)> {
         let segs = segments(d);
-        let total = w.checked_mul(h).and_then(|n| n.checked_mul(nc)).ok_or("dimensions overflow")?;
+        let total = w
+            .checked_mul(h)
+            .and_then(|n| n.checked_mul(nc))
+            .ok_or("dimensions overflow")?;
         let mut out = vec![0u16; total];
         let init = 1i32 << (prec - pt - 1);
         let mut seg_i = 0;
-        let mut bits = Bits { d: segs.first().map_or(&[], |s| s), pos: 0, acc: 0, n: 0 };
+        let mut bits = Bits {
+            d: segs.first().map_or(&[], |s| s),
+            pos: 0,
+            acc: 0,
+            n: 0,
+        };
         let mut interval_start = 0usize;
         for y in 0..h {
             for x in 0..w {
                 let m = y * w + x;
                 if ri > 0 && m > 0 && m % ri == 0 {
                     seg_i += 1;
-                    bits = Bits { d: segs.get(seg_i).map_or(&[], |s| s), pos: 0, acc: 0, n: 0 };
+                    bits = Bits {
+                        d: segs.get(seg_i).map_or(&[], |s| s),
+                        pos: 0,
+                        acc: 0,
+                        n: 0,
+                    };
                     interval_start = m;
                 }
                 for c in 0..nc {
@@ -547,7 +665,11 @@ mod ljpeg {
                         16 => 32768,
                         _ => {
                             let v = bits.get(s) as i32;
-                            if v < (1 << (s - 1)) { v - ((1 << s) - 1) } else { v }
+                            if v < (1 << (s - 1)) {
+                                v - ((1 << s) - 1)
+                            } else {
+                                v
+                            }
                         }
                     };
                     out[idx] = (((px + diff) as u32 & 0xFFFF) << pt) as u16;

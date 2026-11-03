@@ -143,7 +143,9 @@ impl Engine for Pkon {
                     Ok(())
                 }
             }
-            (Format::Dng, Decoded::Standard(_)) => Err("decoded payload is not a RAW mosaic".into()),
+            (Format::Dng, Decoded::Standard(_)) => {
+                Err("decoded payload is not a RAW mosaic".into())
+            }
             _ => Err("decoded payload is not a standard image".into()),
         }
     }
@@ -210,7 +212,9 @@ impl Pkon {
         });
         let layout = match (&m.layout, &pattern) {
             (pkon::lisa::SampleLayout::BayerCfa, Some(p)) => format!("RAW Bayer mosaic {p}"),
-            (pkon::lisa::SampleLayout::OtherCfa, _) => "RAW non-Bayer CFA mosaic (LISA fallback)".to_string(),
+            (pkon::lisa::SampleLayout::OtherCfa, _) => {
+                "RAW non-Bayer CFA mosaic (LISA fallback)".to_string()
+            }
             _ => format!("RAW {:?}", m.layout),
         };
         let mut notes = vec![
@@ -219,7 +223,10 @@ impl Pkon {
                 .to_string(),
         ];
         if !d.camera.is_empty() {
-            notes.push(format!("Camera: {} (read for display only; not stored)", d.camera));
+            notes.push(format!(
+                "Camera: {} (read for display only; not stored)",
+                d.camera
+            ));
         }
         Ok(ImageInfo {
             width: m.width as u32,

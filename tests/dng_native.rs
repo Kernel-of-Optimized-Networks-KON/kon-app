@@ -20,7 +20,10 @@ fn native_matches_python_on_every_corpus_file() {
     for p in corpus() {
         let name = p.file_name().unwrap().to_string_lossy().into_owned();
         let bytes = std::fs::read(&p).unwrap();
-        let (nat, py) = (kon_app::dng::ingest_dng(&bytes), pkon::dng::ingest_dng(&bytes));
+        let (nat, py) = (
+            kon_app::dng::ingest_dng(&bytes),
+            pkon::dng::ingest_dng(&bytes),
+        );
         match (nat, py) {
             (Ok(n), Ok(r)) => {
                 let same = n.samples == r.samples
@@ -29,7 +32,15 @@ fn native_matches_python_on_every_corpus_file() {
                     && n.metadata == r.metadata
                     && n.camera == r.camera
                     && n.dng_compression == r.dng_compression;
-                println!("{} {name}: {}x{} {}-bit {:?} {}", if same { "SAME" } else { "DIFF" }, n.metadata.width, n.metadata.height, n.bit_depth, n.metadata.layout, n.dng_compression);
+                println!(
+                    "{} {name}: {}x{} {}-bit {:?} {}",
+                    if same { "SAME" } else { "DIFF" },
+                    n.metadata.width,
+                    n.metadata.height,
+                    n.bit_depth,
+                    n.metadata.layout,
+                    n.dng_compression
+                );
                 if !same {
                     let first = n.samples.iter().zip(&r.samples).position(|(a, b)| a != b);
                     bad.push(format!("{name}: bd {}/{} decl {}/{} meta_eq {} cam {:?}/{:?} comp {}/{} first sample diff {first:?}", n.bit_depth, r.bit_depth, n.declared_bits, r.declared_bits, n.metadata == r.metadata, n.camera, r.camera, n.dng_compression, r.dng_compression));
@@ -41,8 +52,18 @@ fn native_matches_python_on_every_corpus_file() {
                     bad.push(format!("{name}: error text differs"));
                 }
             }
-            (n, r) => bad.push(format!("{name}: native ok={} python ok={} ({:?} / {:?})", n.is_ok(), r.is_ok(), n.err(), r.err())),
+            (n, r) => bad.push(format!(
+                "{name}: native ok={} python ok={} ({:?} / {:?})",
+                n.is_ok(),
+                r.is_ok(),
+                n.err(),
+                r.err()
+            )),
         }
     }
-    assert!(bad.is_empty(), "native/python disagree:\n{}", bad.join("\n"));
+    assert!(
+        bad.is_empty(),
+        "native/python disagree:\n{}",
+        bad.join("\n")
+    );
 }

@@ -18,7 +18,14 @@ fn tiff(le: bool, tags: &[(u16, u16, Vec<u32>)], data: &[u8]) -> Vec<u8> {
         ifd.extend(w16(*tag));
         ifd.extend(w16(*typ));
         ifd.extend(w32(vals.len() as u32));
-        let bytes: Vec<u8> = vals.iter().flat_map(|&v| match typ { 1 => vec![v as u8], 3 => w16(v as u16).to_vec(), _ => w32(v).to_vec() }).collect();
+        let bytes: Vec<u8> = vals
+            .iter()
+            .flat_map(|&v| match typ {
+                1 => vec![v as u8],
+                3 => w16(v as u16).to_vec(),
+                _ => w32(v).to_vec(),
+            })
+            .collect();
         if bytes.len() <= 4 {
             let mut f = bytes.clone();
             f.resize(4, 0);
@@ -29,7 +36,11 @@ fn tiff(le: bool, tags: &[(u16, u16, Vec<u32>)], data: &[u8]) -> Vec<u8> {
         }
     }
     ifd.extend(w32(0));
-    let mut out = if le { b"II*\0".to_vec() } else { b"MM\0*".to_vec() };
+    let mut out = if le {
+        b"II*\0".to_vec()
+    } else {
+        b"MM\0*".to_vec()
+    };
     out.extend(w32(8));
     out.extend(ifd);
     out.extend(data);
@@ -37,11 +48,26 @@ fn tiff(le: bool, tags: &[(u16, u16, Vec<u32>)], data: &[u8]) -> Vec<u8> {
     out
 }
 
-fn raw_tags(w: u32, h: u32, bps: u32, comp: u32, data_len: u32, off: u32) -> Vec<(u16, u16, Vec<u32>)> {
+fn raw_tags(
+    w: u32,
+    h: u32,
+    bps: u32,
+    comp: u32,
+    data_len: u32,
+    off: u32,
+) -> Vec<(u16, u16, Vec<u32>)> {
     vec![
-        (256, 4, vec![w]), (257, 4, vec![h]), (258, 3, vec![bps]), (259, 3, vec![comp]), (262, 3, vec![32803]),
-        (273, 4, vec![off]), (277, 3, vec![1]), (278, 4, vec![h]), (279, 4, vec![data_len]),
-        (33421, 3, vec![2, 2]), (33422, 1, vec![0, 1, 1, 2]),
+        (256, 4, vec![w]),
+        (257, 4, vec![h]),
+        (258, 3, vec![bps]),
+        (259, 3, vec![comp]),
+        (262, 3, vec![32803]),
+        (273, 4, vec![off]),
+        (277, 3, vec![1]),
+        (278, 4, vec![h]),
+        (279, 4, vec![data_len]),
+        (33421, 3, vec![2, 2]),
+        (33422, 1, vec![0, 1, 1, 2]),
     ]
 }
 
@@ -57,14 +83,25 @@ fn packed_and_endian_variants_decode_exactly() {
     }
     for le in [true, false] {
         let off = 8 + 2 + 11 * 12 + 4;
-        let f = tiff(le, &raw_tags(3, 2, 12, 1, data.len() as u32, off as u32), &data);
+        let f = tiff(
+            le,
+            &raw_tags(3, 2, 12, 1, data.len() as u32, off as u32),
+            &data,
+        );
         let d = ingest_dng(&f).unwrap();
-        assert_eq!(d.samples, [0x123, 0xABC, 0x0F0, 0xFFF, 0x001, 0x800], "le={le}");
+        assert_eq!(
+            d.samples,
+            [0x123, 0xABC, 0x0F0, 0xFFF, 0x001, 0x800],
+            "le={le}"
+        );
         assert_eq!((d.bit_depth, d.declared_bits), (12, 12));
         assert_eq!(d.dng_compression, "NONE");
     }
     // 16-bit big-endian
-    let data16: Vec<u8> = [1u16, 513, 65535, 7].iter().flat_map(|v| v.to_be_bytes()).collect();
+    let data16: Vec<u8> = [1u16, 513, 65535, 7]
+        .iter()
+        .flat_map(|v| v.to_be_bytes())
+        .collect();
     let off = 8 + 2 + 11 * 12 + 4;
     let d = ingest_dng(&tiff(false, &raw_tags(2, 2, 16, 1, 8, off as u32), &data16)).unwrap();
     assert_eq!(d.samples, [1, 513, 65535, 7]);
@@ -75,11 +112,15 @@ fn packed_and_endian_variants_decode_exactly() {
 #[test]
 fn unsupported_variants_are_named() {
     let off = (8 + 2 + 11 * 12 + 4) as u32;
-    let e = ingest_dng(&tiff(true, &raw_tags(2, 2, 16, 8, 8, off), &[0; 8])).err().expect("should fail");
+    let e = ingest_dng(&tiff(true, &raw_tags(2, 2, 16, 8, 8, off), &[0; 8]))
+        .err()
+        .expect("should fail");
     assert!(e.contains("compression 8") && e.contains("DEFLATE"), "{e}");
     let mut t = raw_tags(2, 2, 16, 1, 8, off);
     t.iter_mut().find(|x| x.0 == 258).unwrap().2 = vec![32];
-    let e = ingest_dng(&tiff(true, &t, &[0; 16])).err().expect("should fail");
+    let e = ingest_dng(&tiff(true, &t, &[0; 16]))
+        .err()
+        .expect("should fail");
     assert!(e.contains("unsupported DNG: sample type"), "{e}");
     let e = ingest_dng(b"II+\0\x08\0\x08\0").err().expect("should fail");
     assert!(e.contains("classic TIFF"), "{e}");
@@ -93,7 +134,10 @@ fn truncated_real_dng_errors_cleanly() {
     let bytes = std::fs::read(std::path::Path::new(&dir).join("Nikon__D80__DSC_0143.dng")).unwrap();
     for frac in [1, 7, 50, 333, 500, 777, 990, 999] {
         let cut = bytes.len() * frac / 1000;
-        assert!(ingest_dng(&bytes[..cut]).is_err(), "cut at {cut} should fail");
+        assert!(
+            ingest_dng(&bytes[..cut]).is_err(),
+            "cut at {cut} should fail"
+        );
     }
     // Corrupt entropy data in place: must not panic (Ok or Err both acceptable; samples would simply be wrong, which
     // verification at the engine level would catch against the *same* reader, so this only guards against crashes).
