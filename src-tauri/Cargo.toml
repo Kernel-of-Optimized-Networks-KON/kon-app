@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "KON desktop shell (Tauri 2) over kon-app's JobRunner"
 
-# Standalone workspace: keeps Tauri (and its WebView system deps) out of the core crate's cargo/CI graph.
+# Standalone workspace: keeps Tauri (and its WebView system deps) out of the core crate's cargo graph.
 [workspace]
 
 [dependencies]
