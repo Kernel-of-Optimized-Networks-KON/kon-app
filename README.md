@@ -9,6 +9,12 @@ It uses two specialized compression algorithms:
 
 Compressed files use the `.pkon` format. You can open them in KON's built-in **PKON Viewer**.
 
+![KON PKON Viewer in side-by-side mode, showing an original DNG next to its decoded PKON image, with a message confirming all Bayer samples, the CFA pattern and the 14-bit depth are identical](assets/screenshots/kon-viewer-comparison.png)
+
+*Side-by-side comparison in the PKON Viewer of the original DNG and the decoded PKON output, with lossless Bayer sample verification.*
+
+KON is built on [PKON](https://github.com/Kernel-of-Optimized-Networks-KON/pkon), the underlying compression engine that implements the ELLIE and ULISA codecs and the `.pkon` format.
+
 ## Features
 
 - Compress individual files or whole folders (subfolders are included).
@@ -56,10 +62,6 @@ Each file shows its result. Files KON cannot handle are marked as failed with th
 1. In the Viewer, select a `.pkon` and click **Compare…**.
 2. KON uses the original it remembers from this session. Otherwise it asks you to select the original image. The `.pkon` format does not store the original's filename.
 3. Switch between **Slider** and **Side by side**, and use Fit / 100% / 200% to zoom. RAW comparisons can take several seconds to load.
-
-![KON PKON Viewer in side-by-side mode, showing an original DNG next to its decoded PKON image, with a message confirming all Bayer samples, the CFA pattern and the 14-bit depth are identical](assets/screenshots/kon-viewer-comparison.png)
-
-*Side-by-side comparison in the PKON Viewer of the original DNG and the decoded PKON output, with lossless Bayer sample verification.*
 
 ## Windows security warning
 
