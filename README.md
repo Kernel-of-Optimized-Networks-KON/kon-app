@@ -1,8 +1,10 @@
 # KON
 
-KON is a Windows desktop application for lossless compression of images and RAW photographs.
+**KON is a multimedia compression ecosystem.** Its aim is to bring specialized compression tools for different kinds of media together in one place. Image compression is the starting point, not the boundary of that ambition. **Lossless audio compression is the next planned expansion. It is not available yet.**
 
-It uses two specialized compression algorithms:
+This repository is the **KON Windows desktop application**, the current user-facing application in the ecosystem. It gives you access to the image-compression capabilities of [PKON](https://github.com/Kernel-of-Optimized-Networks-KON/pkon), the ecosystem's image-compression tool: lossless compression of images and RAW photographs.
+
+KON uses two specialized compression algorithms:
 
 - **ELLIE** (codec 6) for PNG and JPEG input.
 - **ULISA** (codec 7) for supported Bayer RAW DNG input.
@@ -12,8 +14,6 @@ Compressed files use the `.pkon` format. You can open them in KON's built-in **P
 ![KON PKON Viewer in side-by-side mode, showing an original DNG next to its decoded PKON image, with a message confirming all Bayer samples, the CFA pattern and the 14-bit depth are identical](assets/screenshots/kon-viewer-comparison.png)
 
 *Side-by-side comparison in the PKON Viewer of the original DNG and the decoded PKON output, with lossless Bayer sample verification.*
-
-KON is built on [PKON](https://github.com/Kernel-of-Optimized-Networks-KON/pkon), the underlying compression engine that implements the ELLIE and ULISA codecs and the `.pkon` format.
 
 ## Features
 
