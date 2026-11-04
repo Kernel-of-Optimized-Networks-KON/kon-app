@@ -57,6 +57,10 @@ Each file shows its result. Files KON cannot handle are marked as failed with th
 2. KON uses the original it remembers from this session. Otherwise it asks you to select the original image. The `.pkon` format does not store the original's filename.
 3. Switch between **Slider** and **Side by side**, and use Fit / 100% / 200% to zoom. RAW comparisons can take several seconds to load.
 
+![KON PKON Viewer in side-by-side mode, showing an original DNG next to its decoded PKON image, with a message confirming all Bayer samples, the CFA pattern and the 14-bit depth are identical](assets/screenshots/kon-viewer-comparison.png)
+
+*Side-by-side comparison in the PKON Viewer of the original DNG and the decoded PKON output, with lossless Bayer sample verification.*
+
 ## Windows security warning
 
 The current KON executable is **unsigned**: it has no code-signing certificate. When you launch it, Windows SmartScreen may show "Windows protected your PC" or an unfamiliar-app warning. This happens because Windows cannot verify a publisher for unsigned programs; it does not by itself mean the file is harmful.
