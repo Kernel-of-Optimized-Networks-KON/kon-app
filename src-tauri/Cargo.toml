@@ -19,3 +19,28 @@ tauri-build = { version = "2", features = [] }
 [profile.release]
 opt-level = 3
 lto = "thin"
+
+# `tauri dev` builds unoptimized by default; decoding/demosaicing a 25 MP RAW takes minutes at opt-level 0.
+# Optimise only the crates on the decode/preview path (not Tauri/windows, which would make cold builds very slow).
+[profile.dev.package.kon-app]
+opt-level = 3
+debug-assertions = false
+overflow-checks = false
+debug = false
+[profile.dev.package.nanoscope]
+opt-level = 3
+debug-assertions = false
+overflow-checks = false
+debug = false
+[profile.dev.package.png]
+opt-level = 3
+[profile.dev.package.miniz_oxide]
+opt-level = 3
+[profile.dev.package.fdeflate]
+opt-level = 3
+[profile.dev.package.flate2]
+opt-level = 3
+[profile.dev.package.crc32fast]
+opt-level = 3
+[profile.dev.package.adler2]
+opt-level = 3

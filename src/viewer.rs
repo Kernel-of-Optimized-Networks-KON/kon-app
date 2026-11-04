@@ -4,7 +4,7 @@ use crate::ingest;
 pub use pkon::canon::Canonical;
 use pkon::{
     canon::Layout,
-    pkon::{self as container, CodecParams, Decoded},
+    pkon::{self as container, CodecParams, Decoded, RawImage},
     ulisa,
 };
 use std::io::Read;
@@ -79,8 +79,8 @@ pub fn inspect_bytes(bytes: &[u8]) -> Result<ContainerInfo, String> {
             Some(format!("{:?}", p.profile)),
             true,
         ),
-        CodecParams::Lisa(_) => ("LISA", "RAW mosaic".to_string(), None, None, false),
-        CodecParams::Ulisa(_) => ("ULISA", "RAW mosaic".to_string(), None, None, false),
+        CodecParams::Lisa(_) => ("LISA", "RAW mosaic".to_string(), None, None, true),
+        CodecParams::Ulisa(_) => ("ULISA", "RAW mosaic".to_string(), None, None, true),
     };
     let bps = container::bytes_per_sample(h.bit_depth) as u64;
     Ok(ContainerInfo {
@@ -105,16 +105,155 @@ pub fn inspect_bytes(bytes: &[u8]) -> Result<ContainerInfo, String> {
 }
 
 /// Decode a `.pkon` file with PKON's own decoder. Its checks (header CRC, pixel CRC32 of the reconstructed samples)
-/// all pass if this returns `Ok`. RAW mosaics are reported as an error rather than shown as a fake picture.
+/// all pass if this returns `Ok`. RAW mosaics are developed for display (see [`render_raw`]).
 pub fn decode_file(path: &Path) -> Result<Canonical, String> {
+    decode_file_with(path, None).map(|(img, _)| img)
+}
+
+/// Like [`decode_file`], but a RAW mosaic is developed with the colour data of `source` (the original DNG) when
+/// given. Returns the picture and a description of how it was rendered.
+pub fn decode_file_with(path: &Path, source: Option<&Path>) -> Result<(Canonical, String), String> {
+    let t = std::time::Instant::now();
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-    match ulisa::decode(&bytes).map_err(|e| e.to_string())? {
-        (_, Decoded::Standard(img)) => Ok(img),
-        (engine, Decoded::Raw(_)) => Err(format!(
-            "{engine:?} RAW mosaic: decodes, but cannot be previewed or exported as a picture (no demosaicing in KON yet)"
-        )),
+    let t_read = t.elapsed();
+    let decoded = ulisa::decode(&bytes).map_err(|e| e.to_string())?;
+    let t_dec = t.elapsed();
+    match decoded {
+        (_, Decoded::Standard(img)) => {
+            eprintln!("[kon-viewer] read {t_read:?}, decode {:?}", t_dec - t_read);
+            Ok((img, "Decoded pixels (no rendering applied)".into()))
+        }
+        // The decoder has already verified the exact mosaic; rendering below only reads it.
+        (_, Decoded::Raw(raw)) => {
+            let meta = source.and_then(|s| source_color_meta(s).ok());
+            let r = render_raw(&raw, meta.as_ref())?;
+            eprintln!(
+                "[kon-viewer] read {t_read:?}, ULISA decode+verify {:?}, render {:?}",
+                t_dec - t_read,
+                t.elapsed() - t_dec
+            );
+            Ok((r.image, r.description))
+        }
     }
 }
+
+fn source_color_meta(source: &Path) -> Result<crate::dng::ColorMeta, String> {
+    crate::dng::color_metadata(&std::fs::read(source).map_err(|e| e.to_string())?)
+}
+
+/// Display/export-only rendering of a decoded RAW mosaic. The mosaic is only read. Bayer files go through the
+/// camera-aware pipeline in [`crate::rawdev`] (generic and clearly labelled when `meta` is `None`); monochrome
+/// files are shown as gray; anything else is refused rather than shown with wrong colours.
+pub fn render_raw(raw: &RawImage, meta: Option<&crate::dng::ColorMeta>) -> Result<crate::rawdev::Rendered, String> {
+    use pkon::lisa::SampleLayout as L;
+    let (w, h) = (raw.metadata.width, raw.metadata.height);
+    if w == 0 || h == 0 || raw.samples.len() != w * h {
+        return Err("malformed RAW: sample count does not match the dimensions".into());
+    }
+    if !(1..=16).contains(&raw.bit_depth) {
+        return Err(format!("malformed RAW: unsupported bit depth {}", raw.bit_depth));
+    }
+    match raw.metadata.layout {
+        L::Monochrome => {
+            let white = ((1u32 << raw.bit_depth) - 1) as f32;
+            let data = raw
+                .samples
+                .iter()
+                .map(|&s| {
+                    let v = (s as f32 / white).clamp(0.0, 1.0);
+                    let o = if v <= 0.003_130_8 { 12.92 * v } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
+                    (o * 255.0 + 0.5) as u8
+                })
+                .collect();
+            let spec = pkon::canon::Spec { width: w as u32, height: h as u32, layout: Layout::Gray, bit_depth: 8 };
+            Ok(crate::rawdev::Rendered {
+                image: Canonical::new(spec, data)?,
+                description: "Monochrome sensor: linear to sRGB curve".into(),
+                camera_aware: false,
+            })
+        }
+        L::BayerCfa => {
+            raw.metadata.validate().map_err(|e| format!("malformed RAW metadata: {e}"))?;
+            let cfa = raw.metadata.cfa.as_ref().ok_or("malformed RAW metadata: Bayer layout without a CFA pattern")?;
+            crate::rawdev::develop(&raw.samples, w, h, raw.bit_depth, cfa, meta)
+        }
+        L::OtherCfa => Err("unsupported RAW: non-Bayer colour filter array (e.g. X-Trans or a larger repeat); KON cannot demosaic it, so no preview is shown".into()),
+        L::Linear | L::Unspecified => Err("unsupported RAW: the file does not describe a Bayer or monochrome sensor layout, so colours cannot be interpreted".into()),
+        _ => Err("unsupported RAW sample layout".into()),
+    }
+}
+
+/// Generic (metadata-free) rendering, as used when only the `.pkon` is available.
+pub fn demosaic_preview(raw: &RawImage) -> Result<Canonical, String> {
+    render_raw(raw, None).map(|r| r.image)
+}
+
+/// Result of comparing a source file with the image decoded from its `.pkon` output.
+pub struct Comparison {
+    /// Source rendered for display (RAW: same pipeline and settings as `decoded`).
+    pub original: Canonical,
+    /// Image decoded from the actual `.pkon` file.
+    pub decoded: Canonical,
+    /// True only if the underlying data were compared and found identical.
+    pub identical: bool,
+    /// Exactly what was compared and what was found.
+    pub verdict: String,
+    /// How the pictures were rendered (RAW only).
+    pub rendering: Option<String>,
+}
+
+/// Decode the real `.pkon` and load the real source, then compare the underlying data (not the rendering).
+/// PNG/JPEG: decoded pixels vs. the source's decoded pixels. DNG: decoded Bayer samples + CFA + bit depth vs. the
+/// source's stored raster; both sides are then rendered with the same DNG colour data and settings.
+pub fn compare_files(source: &Path, pkon_path: &Path) -> Result<Comparison, String> {
+    let bytes = std::fs::read(pkon_path).map_err(|e| e.to_string())?;
+    match ulisa::decode(&bytes).map_err(|e| e.to_string())?.1 {
+        Decoded::Standard(decoded) => {
+            let original = Canonical::load(source).map_err(|e| format!("this .pkon holds a standard image, but the selected file cannot be read as PNG/JPEG: {e}"))?;
+            let (identical, verdict) = match pkon::canon::first_mismatch(&original, &decoded) {
+                None => (
+                    true,
+                    format!(
+                        "Pixel data identical: all {}×{} {} samples of the decoded .pkon equal the source's decoded pixels.",
+                        original.spec.width,
+                        original.spec.height,
+                        original.spec.label()
+                    ),
+                ),
+                Some(m) => (false, format!("Pixel data DIFFERS from the source: {m:?}")),
+            };
+            Ok(Comparison { original, decoded, identical, verdict, rendering: None })
+        }
+        Decoded::Raw(back) => {
+            let source_bytes = std::fs::read(source).map_err(|e| e.to_string())?;
+            let wrong = |e: String| format!("this .pkon holds a RAW mosaic, so the original must be the DNG it was made from ({e})");
+            let src = crate::dng::ingest_dng(&source_bytes).map_err(wrong)?;
+            let meta = crate::dng::color_metadata(&source_bytes).map_err(wrong)?;
+            let same = back.samples == src.samples && back.bit_depth == src.bit_depth && back.metadata == src.metadata;
+            let n = back.samples.len();
+            let src_raw = RawImage { samples: src.samples, metadata: src.metadata, bit_depth: src.bit_depth };
+            // Same function, same metadata, same settings on both sides.
+            let (a, b) = std::thread::scope(|s| {
+                let h = s.spawn(|| render_raw(&src_raw, Some(&meta)));
+                (h.join().unwrap(), render_raw(&back, Some(&meta)))
+            });
+            let (a, b) = (a?, b?);
+            let verdict = if same {
+                format!(
+                    "RAW mosaic identical: all {n} Bayer samples, the CFA pattern and the {}-bit depth of the decoded .pkon equal the DNG's stored raster.",
+                    back.bit_depth
+                )
+            } else {
+                "RAW mosaic DIFFERS from the DNG's stored raster.".to_string()
+            };
+            Ok(Comparison { original: a.image, decoded: b.image, identical: same, verdict, rendering: Some(b.description) })
+        }
+    }
+}
+
+/// Bundled demo photograph: an unmodified RICOH GR III Bayer RAW DNG (CC0, see `assets/sample/ATTRIBUTION.md`).
+/// Embedded in the binary so the sample works offline; it goes through the normal DNG -> ULISA path.
+pub const SAMPLE_DNG: &[u8] = include_bytes!("../assets/sample/kon-sample.dng");
 
 /// Encode decoded pixels as PNG (8 or 16 bit; PNG stores 16-bit samples big-endian, PKON holds them little-endian).
 /// `fast` trades size for speed, for previews.

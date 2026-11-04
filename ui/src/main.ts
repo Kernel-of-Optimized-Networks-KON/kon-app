@@ -2,8 +2,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
-import { $, bytes, duration, el } from "./util";
+import { $, bytes, duration, el, sourceHints } from "./util";
 import { addViewerPaths, initViewer } from "./viewer";
+import { closeCompare, initCompare } from "./compare";
 
 type Status = "queued" | "processing" | "verifying" | "complete" | "failed" | "cancelled" | "skipped";
 type StageName = "compressing" | "verifying" | "writing";
@@ -230,7 +231,7 @@ void listen<JobEvent>("job-event", ({ payload: ev }) => {
       it.stage = ev.stage;
       it.status = ev.stage === "verifying" ? "verifying" : "processing";
       break;
-    case "done": it.status = "complete"; it.output = ev.output; it.outBytes = ev.outBytes; break;
+    case "done": it.status = "complete"; it.output = ev.output; it.outBytes = ev.outBytes; sourceHints.set(ev.output, it.path); break;
     case "failed": it.status = "failed"; it.error = ev.error; break;
     case "cancelled": it.status = "cancelled"; break;
   }
@@ -248,6 +249,10 @@ async function pick(directory: boolean) {
 }
 $("add-files").addEventListener("click", () => void pick(false));
 $("add-folder").addEventListener("click", () => void pick(true));
+$("sample").addEventListener("click", async () => {
+  try { await addPaths([await invoke<string>("create_sample")]); }
+  catch (e) { $("summary").textContent = `Could not create the sample: ${String(e)}`; }
+});
 $("clear").addEventListener("click", () => {
   items.clear(); knownPaths.clear(); selected = null; batchTotal = 0; progress = null;
   renderAll(); void renderInspector();
@@ -304,6 +309,7 @@ type Tab = "compress" | "viewer";
 let activeTab: Tab = "compress";
 function showTab(t: Tab) {
   activeTab = t;
+  if (!$("view-compare").hidden) { $("view-compare").hidden = true; closeCompare(); }
   for (const name of ["compress", "viewer"] as Tab[]) {
     $("view-" + name).hidden = name !== t;
     $("actions-" + name).hidden = name !== t;
@@ -314,4 +320,5 @@ function showTab(t: Tab) {
 $("tab-compress").addEventListener("click", () => showTab("compress"));
 $("tab-viewer").addEventListener("click", () => showTab("viewer"));
 initViewer();
+initCompare();
 showTab("compress");

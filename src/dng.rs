@@ -160,6 +160,108 @@ fn compression_name(c: u64) -> String {
     }
 }
 
+// ---------------------------------------------------------------- colour metadata (display only)
+
+/// DNG colour/level tags needed to render a mosaic for display. Read-only: none of this touches the stored samples
+/// and none of it is stored in `.pkon`, so it must come from the original DNG.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ColorMeta {
+    pub camera: String,
+    pub as_shot_neutral: Option<[f64; 3]>,
+    pub black_level: Option<Vec<f64>>,
+    /// (rows, cols) of the BlackLevel repeat pattern.
+    pub black_repeat: (usize, usize),
+    pub white_level: Option<f64>,
+    pub color_matrix1: Option<[f64; 9]>,
+    pub color_matrix2: Option<[f64; 9]>,
+    pub forward_matrix1: Option<[f64; 9]>,
+    pub forward_matrix2: Option<[f64; 9]>,
+    pub camera_calibration1: Option<[f64; 9]>,
+    pub camera_calibration2: Option<[f64; 9]>,
+    pub analog_balance: Option<[f64; 3]>,
+    pub illuminant1: Option<u16>,
+    pub illuminant2: Option<u16>,
+    pub baseline_exposure: Option<f64>,
+}
+
+impl Ifd {
+    fn floats(&self, t: &Tiff, tag: u16) -> Option<Vec<f64>> {
+        let e = self.tags.get(&tag)?;
+        let sz = type_size(e.typ)?;
+        (0..e.count)
+            .map(|i| {
+                let o = e.at + i * sz;
+                match e.typ {
+                    1 | 7 => t.d.get(o).map(|&b| b as f64),
+                    6 => t.d.get(o).map(|&b| b as i8 as f64),
+                    3 => t.u16(o).ok().map(f64::from),
+                    8 => t.u16(o).ok().map(|v| v as i16 as f64),
+                    4 => t.u32(o).ok().map(f64::from),
+                    9 => t.u32(o).ok().map(|v| v as i32 as f64),
+                    11 => t.u32(o).ok().map(|v| f32::from_bits(v) as f64),
+                    5 | 10 => {
+                        let (n, d) = (t.u32(o).ok()?, t.u32(o + 4).ok()?);
+                        if d == 0 {
+                            return None;
+                        }
+                        let n = if e.typ == 10 { n as i32 as f64 } else { n as f64 };
+                        let d = if e.typ == 10 { d as i32 as f64 } else { d as f64 };
+                        Some(n / d)
+                    }
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+}
+
+/// Read the DNG colour tags from the same raw directory `ingest_dng` selects (falling back to the first directory,
+/// where DNG puts the colour tags). Missing tags stay `None`; nothing is invented.
+pub fn color_metadata(d: &[u8]) -> R<ColorMeta> {
+    let le = match d.get(..4) {
+        Some(b"II*\0") => true,
+        Some(b"MM\0*") => false,
+        _ => return Err("not a classic TIFF/DNG header".into()),
+    };
+    let t = Tiff { d, le };
+    let mut ifds = Vec::new();
+    let mut off = t.u32(4)? as usize;
+    while off != 0 && ifds.len() < 64 {
+        let (ifd, next) = read_ifd(&t, off, 0)?;
+        ifds.push(ifd);
+        off = next;
+    }
+    let pages = all_pages(&ifds);
+    let area = |p: &Ifd| p.uint(&t, 256).unwrap_or(0) * p.uint(&t, 257).unwrap_or(0);
+    let raw: Vec<&Ifd> = pages.iter().copied().filter(|p| matches!(p.uint(&t, 262), Some(32803 | 34892))).collect();
+    let cand = if raw.is_empty() { &pages } else { &raw };
+    let p = cand.iter().copied().fold(None::<&Ifd>, |b, p| if b.is_none_or(|b| area(p) > area(b)) { Some(p) } else { b });
+    let p = p.ok_or("no image directory found")?;
+    let root = pages.first().ok_or("no image directory found")?;
+    let find = |tag: u16| p.floats(&t, tag).or_else(|| root.floats(&t, tag));
+    let nine = |tag: u16| find(tag).and_then(|v| <[f64; 9]>::try_from(v).ok());
+    let three = |tag: u16| find(tag).and_then(|v| <[f64; 3]>::try_from(v).ok());
+    let rep = find(50713).filter(|v| v.len() == 2 && v[0] >= 1.0 && v[1] >= 1.0).map(|v| (v[0] as usize, v[1] as usize)).unwrap_or((1, 1));
+    let black = find(50714).filter(|v| v.len() == rep.0 * rep.1 || v.len() == 1);
+    Ok(ColorMeta {
+        camera: format!("{} {}", root.ascii(&t, 271).unwrap_or_default(), root.ascii(&t, 272).unwrap_or_default()).trim().to_string(),
+        as_shot_neutral: three(50728),
+        black_level: black,
+        black_repeat: rep,
+        white_level: find(50717).and_then(|v| v.first().copied()),
+        color_matrix1: nine(50721),
+        color_matrix2: nine(50722),
+        forward_matrix1: nine(50964),
+        forward_matrix2: nine(50965),
+        camera_calibration1: nine(50723),
+        camera_calibration2: nine(50724),
+        analog_balance: three(50727),
+        illuminant1: find(50778).and_then(|v| v.first().map(|&x| x as u16)),
+        illuminant2: find(50779).and_then(|v| v.first().map(|&x| x as u16)),
+        baseline_exposure: find(50730).and_then(|v| v.first().copied()),
+    })
+}
+
 // ---------------------------------------------------------------- public entry
 
 pub fn ingest_dng(bytes: &[u8]) -> R<DngInput> {

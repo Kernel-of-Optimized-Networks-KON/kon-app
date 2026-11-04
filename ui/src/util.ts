@@ -1,3 +1,6 @@
+/** `.pkon` path -> the original it was made from (session knowledge only; the .pkon format stores no source). */
+export const sourceHints = new Map<string, string>();
+
 export const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
 export function bytes(n: number): string {

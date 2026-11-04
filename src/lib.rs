@@ -5,4 +5,5 @@ pub mod engine;
 pub mod ingest;
 pub mod job;
 pub mod platform;
+pub mod rawdev;
 pub mod viewer;

@@ -290,9 +290,10 @@ fn run_batch(app: AppHandle, items: Vec<BatchItem>, dest: PathBuf, cancel: Arc<A
 /// One decoded image kept so inspector/export interactions never decode twice. Keyed by path + size + mtime so an
 /// edited file is re-decoded. Single entry: a decoded image can be up to PKON's 256 MiB decode limit.
 struct Decoded {
-    key: (PathBuf, u64, Option<std::time::SystemTime>),
+    key: (PathBuf, u64, Option<std::time::SystemTime>, Option<PathBuf>),
     image: Arc<viewer::Canonical>,
     preview_png: Arc<Vec<u8>>,
+    note: String,
 }
 
 #[derive(Default)]
@@ -387,20 +388,24 @@ async fn scan_pkon(paths: Vec<String>) -> Result<Vec<PkonEntry>, String> {
 /// Decode (or reuse the cached decode of) a file. Runs on a blocking thread.
 async fn decode_cached(
     path: String,
+    source: Option<String>,
     cache: &ViewerCache,
 ) -> Result<(Arc<viewer::Canonical>, Arc<Vec<u8>>), String> {
     let p = PathBuf::from(path);
     let meta = std::fs::metadata(&p).map_err(|e| e.to_string())?;
-    let key = (p.clone(), meta.len(), meta.modified().ok());
+    let src = source.map(PathBuf::from);
+    let key = (p.clone(), meta.len(), meta.modified().ok(), src.clone());
     if let Some(d) = cache.0.lock().unwrap().as_ref() {
         if d.key == key {
             return Ok((d.image.clone(), d.preview_png.clone()));
         }
     }
-    let (image, png) = tauri::async_runtime::spawn_blocking(move || {
-        let img = viewer::decode_file(&p)?;
+    let (image, png, note) = tauri::async_runtime::spawn_blocking(move || {
+        let (img, note) = viewer::decode_file_with(&p, src.as_deref())?;
+        let t = std::time::Instant::now();
         let png = viewer::encode_png(&img, true)?;
-        Ok::<_, String>((Arc::new(img), Arc::new(png)))
+        eprintln!("[kon-viewer] preview PNG encode {:?}, {} bytes", t.elapsed(), png.len());
+        Ok::<_, String>((Arc::new(img), Arc::new(png), note))
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -408,6 +413,7 @@ async fn decode_cached(
         key,
         image: image.clone(),
         preview_png: png.clone(),
+        note,
     });
     Ok((image, png))
 }
@@ -417,9 +423,10 @@ async fn decode_cached(
 #[tauri::command]
 async fn decode_pkon(
     path: String,
+    source: Option<String>,
     cache: State<'_, ViewerCache>,
 ) -> Result<tauri::ipc::Response, String> {
-    let (_, png) = decode_cached(path, &cache).await?;
+    let (_, png) = decode_cached(path, source, &cache).await?;
     Ok(tauri::ipc::Response::new(png.as_ref().clone()))
 }
 
@@ -433,11 +440,18 @@ struct ExportError {
 
 /// Export the decoded original as PNG. Never replaces an existing file unless `overwrite` is true, which the UI sets
 /// only after the user explicitly confirms.
+/// How the most recently decoded viewer image was rendered (RAW pipeline description).
+#[tauri::command]
+fn render_note(cache: State<'_, ViewerCache>) -> String {
+    cache.0.lock().unwrap().as_ref().map(|d| d.note.clone()).unwrap_or_default()
+}
+
 #[tauri::command]
 async fn export_pkon_png(
     path: String,
     dest: String,
     overwrite: bool,
+    source: Option<String>,
     cache: State<'_, ViewerCache>,
 ) -> Result<u64, ExportError> {
     let other = |m: String| ExportError {
@@ -454,7 +468,7 @@ async fn export_pkon_png(
             message: format!("{} already exists.", dest.display()),
         });
     }
-    let (image, _) = decode_cached(path, &cache).await.map_err(other)?;
+    let (image, _) = decode_cached(path, source, &cache).await.map_err(other)?;
     tauri::async_runtime::spawn_blocking(move || {
         let png = viewer::encode_png(&image, false)?;
         platform::write_file(&dest, &png, overwrite)
@@ -466,11 +480,96 @@ async fn export_pkon_png(
     .map_err(other)
 }
 
+/// Both sides of a comparison, as preview PNGs, kept for the compare view (single entry).
+#[derive(Default)]
+struct CompareCache(Mutex<Option<(Arc<Vec<u8>>, Arc<Vec<u8>>)>>);
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CompareInfo {
+    width: u32,
+    height: u32,
+    identical: bool,
+    verdict: String,
+    rendering: Option<String>,
+    ms: u64,
+}
+
+/// Load the original and decode the real `.pkon`, compare the underlying data, and stage both previews.
+#[tauri::command]
+async fn compare_open(
+    source: String,
+    pkon: String,
+    cache: State<'_, CompareCache>,
+) -> Result<CompareInfo, String> {
+    let r = tauri::async_runtime::spawn_blocking(move || {
+        let t = Instant::now();
+        let c = viewer::compare_files(std::path::Path::new(&source), std::path::Path::new(&pkon))?;
+        let (a, b) = std::thread::scope(|s| {
+            let h = s.spawn(|| viewer::encode_png(&c.original, true));
+            let b = viewer::encode_png(&c.decoded, true);
+            (h.join().unwrap(), b)
+        });
+        let (a, b) = (a?, b?);
+        eprintln!("[kon-compare] load+decode+compare+encode {:?}", t.elapsed());
+        let (w, h) = (c.decoded.spec.width, c.decoded.spec.height);
+        if (c.original.spec.width, c.original.spec.height) != (w, h) {
+            return Err(format!("the selected original is {}×{} but the decoded .pkon is {w}×{h}: it is not this image's original", c.original.spec.width, c.original.spec.height));
+        }
+        Ok::<_, String>((
+            CompareInfo { width: w, height: h, identical: c.identical, verdict: c.verdict, rendering: c.rendering, ms: t.elapsed().as_millis() as u64 },
+            (Arc::new(a), Arc::new(b)),
+        ))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    *cache.0.lock().unwrap() = Some(r.1);
+    Ok(r.0)
+}
+
+/// PNG bytes of one staged side: `original` or `compressed`.
+#[tauri::command]
+fn compare_image(side: String, cache: State<'_, CompareCache>) -> Result<tauri::ipc::Response, String> {
+    let g = cache.0.lock().unwrap();
+    let (a, b) = g.as_ref().ok_or("no comparison is loaded")?;
+    let png = if side == "original" { a } else { b };
+    Ok(tauri::ipc::Response::new(png.as_ref().clone()))
+}
+
+/// Write the bundled sample DNG (a real RICOH GR III Bayer RAW, byte-for-byte) and return its path.
+#[tauri::command]
+fn create_sample() -> Result<String, String> {
+    let dir = std::env::temp_dir().join("kon-sample");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join("kon-sample.dng");
+    let bytes = viewer::SAMPLE_DNG;
+    // Rewrite only if missing or different, so repeated clicks stay fast.
+    if std::fs::read(&path).map(|b| b != bytes).unwrap_or(true) {
+        std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+    }
+    Ok(path.to_string_lossy().into_owned())
+}
+
+/// Compress the built-in sample with the real engine into a `.pkon` for the Viewer demo (fully offline).
+#[tauri::command]
+async fn create_sample_pkon() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let png = create_sample()?;
+        let bytes = kon_app::engine::Engine::compress(&Pkon, std::path::Path::new(&png))?;
+        let out = std::path::Path::new(&png).with_extension("pkon");
+        std::fs::write(&out, bytes).map_err(|e| e.to_string())?;
+        Ok::<_, String>(out.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
         .manage(ViewerCache::default())
+        .manage(CompareCache::default())
         .invoke_handler(tauri::generate_handler![
             add_paths,
             inspect_file,
@@ -478,7 +577,12 @@ pub fn run() {
             cancel_batch,
             scan_pkon,
             decode_pkon,
-            export_pkon_png
+            export_pkon_png,
+            compare_open,
+            compare_image,
+            create_sample,
+            create_sample_pkon,
+            render_note
         ])
         .run(tauri::generate_context!())
         .expect("error while running KON");

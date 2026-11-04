@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { ask, open, save } from "@tauri-apps/plugin-dialog";
-import { $, bytes, el } from "./util";
+import { $, bytes, el, sourceHints } from "./util";
+import { startCompare } from "./compare";
 
 interface ContainerInfo {
   containerVersion: number; codecId: number; codecName: string;
@@ -84,6 +85,7 @@ async function select(path: string) {
   renderList();
   decodedOk = false;
   ($("v-export") as HTMLButtonElement).disabled = true;
+  ($("v-compare") as HTMLButtonElement).disabled = true;
   dropImage();
   $("v-dims").textContent = "";
   setStatus([]);
@@ -96,21 +98,34 @@ async function select(path: string) {
     return;
   }
   if (!e.info.previewable) {
-    setState(`${e.info.codecName} is a RAW-sensor codec. The file is valid, but KON cannot show it as a picture (it would need demosaicing, which is not implemented).`);
-    setStatus([["", "Preview and export unavailable for RAW codecs"]]);
+    setState(`${e.info.codecName} cannot be previewed.`);
+    setStatus([["", "Preview and export unavailable"]]);
     return;
   }
 
   setState("Decoding…");
   const t0 = performance.now();
   try {
-    const raw = await invoke<ArrayBuffer | number[]>("decode_pkon", { path });
+    const raw = await invoke<ArrayBuffer | number[]>("decode_pkon", { path, source: sourceHints.get(path) ?? null });
+    const tIpc = performance.now();
     // Raw bytes normally; a JSON number array if the IPC fast path is unavailable.
     const buf = raw instanceof ArrayBuffer ? raw : Uint8Array.from(raw);
     if (token !== loadToken) return;
     const url = URL.createObjectURL(new Blob([buf], { type: "image/png" }));
     const img = $<HTMLImageElement>("v-img");
-    img.onload = () => { if (token === loadToken) applyZoom(); };
+    img.onload = () => {
+      if (token !== loadToken) return;
+      applyZoom();
+      console.info(`[kon-viewer] backend+IPC ${Math.round(tIpc - t0)} ms, browser PNG decode/render ${Math.round(performance.now() - tIpc)} ms`);
+    };
+    img.onerror = () => {
+      if (token !== loadToken) return;
+      e.verify = "failed";
+      e.verifyError = "the browser could not display the preview image";
+      setState("Preview image could not be displayed by the webview.", true);
+      setStatus([["bad", "Render failed"]]);
+      renderInfo();
+    };
     img.src = url;
     currentUrl = url;
     img.hidden = false;
@@ -118,8 +133,10 @@ async function select(path: string) {
     e.verify = "ok";
     decodedOk = true;
     ($("v-export") as HTMLButtonElement).disabled = false;
+    ($("v-compare") as HTMLButtonElement).disabled = false;
     $("v-dims").textContent = `${e.info.width} × ${e.info.height} px`;
-    setStatus([["ok", "✓ Decoded and integrity-checked"], ["", `${Math.round(performance.now() - t0)} ms`]]);
+    const note = e.info.codecName === "ULISA" || e.info.codecName === "LISA" ? await invoke<string>("render_note").catch(() => "") : "";
+    setStatus([["ok", "✓ Decoded and integrity-checked"], ["", `${Math.round(performance.now() - t0)} ms`], ...(note ? [["", note] as [string, string]] : [])]);
   } catch (err) {
     if (token !== loadToken) return;
     e.verify = "failed";
@@ -202,7 +219,7 @@ function renderInfo() {
     pending: "Not verified yet (decode to check)",
     ok: "✓ Decoded pixels match the stored CRC32",
     failed: `✗ ${e.verifyError ?? "failed"}`,
-    "n/a": "Not checked (RAW codec is not decoded in the viewer)",
+    "n/a": "Not checked",
   };
   row("Pixel verification", vtext[e.verify]);
   if (e.verify === "ok") kv!.lastElementChild!.classList.add("good");
@@ -226,7 +243,7 @@ async function doExport() {
     let overwrite = false;
     for (;;) {
       try {
-        const n = await invoke<number>("export_pkon_png", { path: e.path, dest, overwrite });
+        const n = await invoke<number>("export_pkon_png", { path: e.path, dest, overwrite, source: sourceHints.get(e.path) ?? null });
         setStatus([["ok", `✓ Exported ${bytes(n)}`], ["", dest]]);
         break;
       } catch (err) {
@@ -259,9 +276,25 @@ export function initViewer() {
     entries.clear(); selected = null; ++loadToken; decodedOk = false;
     dropImage();
     ($("v-export") as HTMLButtonElement).disabled = true;
+    ($("v-compare") as HTMLButtonElement).disabled = true;
     $("v-dims").textContent = ""; setStatus([]);
     setState("Select a file to preview it.");
     renderList(); renderInfo();
+  });
+  $("v-sample").addEventListener("click", async () => {
+    try {
+      // The sample original is generated locally next to the sample .pkon, so Compare finds it automatically.
+      const png = await invoke<string>("create_sample");
+      const pk = await invoke<string>("create_sample_pkon");
+      sourceHints.set(pk, png);
+      await addViewerPaths([pk]);
+    }
+    catch (err) { setState(`Could not create the sample: ${String(err)}`, true); }
+  });
+  $("v-compare").addEventListener("click", () => {
+    const e = selected ? entries.get(selected) : undefined;
+    if (!e || !decodedOk) return;
+    void startCompare(e.path, e.name);
   });
   $("v-export").addEventListener("click", () => void doExport());
   $("v-zoom").addEventListener("click", (ev) => {

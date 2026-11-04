@@ -152,7 +152,7 @@ fn bayer_dng_roundtrips_exactly() {
     assert_eq!(output.extension().unwrap(), "pkon");
     let info = viewer::inspect_file(&output).unwrap();
     assert_eq!(info.codec_name, "ULISA");
-    assert!(!info.previewable);
+    assert!(info.previewable);
     let (_, dec) = pkon::ulisa::decode(&std::fs::read(&output).unwrap()).unwrap();
     let pkon::pkon::Decoded::Raw(raw) = dec else {
         panic!("not RAW")
@@ -161,9 +161,11 @@ fn bayer_dng_roundtrips_exactly() {
     assert_eq!(raw.samples, ing.samples);
     assert_eq!(raw.metadata, ing.metadata);
     assert_eq!(raw.bit_depth, ing.bit_depth);
-    assert!(viewer::decode_file(&output)
-        .unwrap_err()
-        .contains("cannot be previewed"));
+    let preview = viewer::decode_file(&output).unwrap();
+    assert_eq!(
+        (preview.spec.width as usize, preview.spec.height as usize),
+        (ing.metadata.width, ing.metadata.height)
+    );
     assert_eq!(before, sig(&src));
     println!(
         "D80 {in_bytes} -> {out_bytes} ({:.2}x), {}x{} {}-bit",

@@ -19,11 +19,13 @@
           <div id="actions-compress" class="top-actions">
             <button id="add-files" class="btn">Add Files</button>
             <button id="add-folder" class="btn">Add Folder</button>
+            <button id="sample" class="btn">Try sample</button>
             <button id="clear" class="btn ghost">Clear</button>
           </div>
           <div id="actions-viewer" class="top-actions" hidden>
             <button id="v-open-files" class="btn">Open Files</button>
             <button id="v-open-folder" class="btn">Open Folder</button>
+            <button id="v-sample" class="btn">Open sample</button>
             <button id="v-clear" class="btn ghost">Clear</button>
           </div>
         </div>
@@ -75,6 +77,32 @@
         </footer>
       </div>
 
+      <!-- ============ Compare (original vs. decoded .pkon) ============ -->
+      <div id="view-compare" class="view compare-view" hidden>
+        <div class="v-toolbar">
+          <button id="c-back" class="btn">← Back to Viewer</button>
+          <span id="c-name" class="muted c-name"></span>
+          <button id="c-change" class="btn ghost">Change original…</button>
+          <span class="spacer"></span>
+          <div class="seg" id="c-mode">
+            <button data-mode="slider" class="on">Slider</button>
+            <button data-mode="side">Side by side</button>
+          </div>
+          <div class="seg" id="c-zoom">
+            <button data-zoom="fit">Fit</button>
+            <button data-zoom="1">100%</button>
+            <button data-zoom="2">200%</button>
+          </div>
+          <span id="c-zoomlabel" class="muted c-zoomlabel"></span>
+        </div>
+        <div id="c-stage" class="c-stage"></div>
+        <div class="v-status c-foot">
+          <div id="c-verdict" class="c-verdict"></div>
+          <div id="c-render" class="muted c-render"></div>
+          <div class="muted c-hint">Scroll to zoom · drag to pan (both images move together) · double-click to fit</div>
+        </div>
+      </div>
+
       <!-- ============ PKON Viewer workspace ============ -->
       <div id="view-viewer" class="view viewer-view" hidden>
         <aside class="v-browser">
@@ -95,6 +123,7 @@
             </div>
             <span id="v-dims" class="muted"></span>
             <span class="spacer"></span>
+            <button id="v-compare" class="btn" disabled title="Compare this .pkon with its original image">Compare…</button>
             <button id="v-export" class="btn primary" disabled>Export as PNG…</button>
           </div>
           <div id="v-canvas" class="v-canvas">
